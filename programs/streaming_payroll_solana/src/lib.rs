@@ -47,12 +47,25 @@ pub struct CreateStream<'info> {
 
     pub token_program: Program<'info, Token>, // Required for token transfers
 
-    #[account(mut)]
-pub employer_token_account: Account<'info, TokenAccount>,
-
-
     pub system_program: Program<'info, System>, // Required for account creation
     pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+pub struct depositToVault<'info>{
+    #[account(mut)]
+    pub employer: Signer<'info>,
+
+    #[account(mut)]
+    pub stream: Account<'info, Stream>,
+
+    #[account(mut)]
+    pub vault: Account<'info, TokenAccount>,
+
+    #[account(mut)]
+    pub employer_token_account: Account<'info, TokenAccount>,
+
+    pub token_program: Program<'info, Token>,
 }
 
 #[program]
@@ -85,6 +98,10 @@ pub mod streaming_payroll_solana {
             stream.employee
         );
 
+        Ok(()) // Return success
+    }
+
+    pub fn deposit_to_vault(ctx: Context<depositToVault>,amount:u64)->Result<()>{
         // Transfer tokens from employer → vault
         let cpi_accounts = Transfer {
             from: ctx.accounts.employer_token_account.to_account_info(),
@@ -95,8 +112,10 @@ pub mod streaming_payroll_solana {
         let cpi_ctx = CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts);
 
         // Actually transfer the tokens
-        token::transfer(cpi_ctx, deposited_amount)?;
+        token::transfer(cpi_ctx, amount)?;
 
-        Ok(()) // Return success
+        ctx.accounts.stream.deposited_amount += amount;
+        msg!("Deposited {} tokens to vault", amount);
+        Ok(())
     }
 }

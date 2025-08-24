@@ -27,9 +27,15 @@ describe("streaming_payroll_solana", () => {
   const employer = loadWallet("/Users/tusharmac/imp/Projects/Solana/testing_wallets/dev1.json");
   const employee = loadWallet("/Users/tusharmac/imp/Projects/Solana/testing_wallets/dev2.json");
 
-  it("Create a payroll stream and deposit tokens to vault", async () => {
+  let mint: anchor.web3.PublicKey;
+  let employerTokenAccount: any;
+  let employeeTokenAccount: any;
+  let streamPda: anchor.web3.PublicKey;
+  let vaultPda: anchor.web3.PublicKey;
+
+  before(async ()=>{
     // 1️⃣ Create a new token mint
-    const mint = await createMint(
+      mint = await createMint(
       provider.connection,
       employer,           // payer
       employer.publicKey, // mint authority
@@ -39,14 +45,14 @@ describe("streaming_payroll_solana", () => {
     console.log("Created token mint:", mint.toBase58());
 
     // 2️⃣ Create token accounts for employer and employee
-    const employerTokenAccount = await getOrCreateAssociatedTokenAccount(
+      employerTokenAccount = await getOrCreateAssociatedTokenAccount(
       provider.connection,
       employer,          // payer
       mint,              // mint
       employer.publicKey // owner
     );
 
-    const employeeTokenAccount = await getOrCreateAssociatedTokenAccount(
+      employeeTokenAccount = await getOrCreateAssociatedTokenAccount(
       provider.connection,
       employer,          // payer
       mint,              // mint
@@ -70,19 +76,22 @@ describe("streaming_payroll_solana", () => {
     const updatedEmployerToken = await getAccount(provider.connection, employerTokenAccount.address);
     console.log("Employer token balance after mint:", Number(updatedEmployerToken.amount)); // should be 1200
 
-    // 4️⃣ Derive PDAs for stream and vault
-    const [streamPda] = await anchor.web3.PublicKey.findProgramAddressSync(
+        // 4️⃣ Derive PDAs for stream and vault
+    [streamPda] = await anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("stream"), employer.publicKey.toBuffer(), employee.publicKey.toBuffer()],
       program.programId
     );
 
-    const [vaultPda] = await anchor.web3.PublicKey.findProgramAddressSync(
+    [vaultPda] = await anchor.web3.PublicKey.findProgramAddressSync(
       [Buffer.from("vault"), employer.publicKey.toBuffer(), employee.publicKey.toBuffer()],
       program.programId
     );
 
     console.log("Stream PDA:", streamPda.toBase58());
     console.log("Vault PDA:", vaultPda.toBase58());
+  })
+  
+  it("Create a payroll stream and deposit tokens to vault", async () => {
 
     // 5️⃣ Call createStream (move 980 tokens to vault for employee)
     const tx = await program.methods
@@ -102,16 +111,7 @@ describe("streaming_payroll_solana", () => {
       .signers([employer])
       .rpc();
 
-    console.log("Transaction signature:", tx);
-
-    // 6️⃣ Fetch updated balances after stream creation
-    const vaultTokenAccount = await getAccount(provider.connection, vaultPda);
-    const employerTokenAfter = await getAccount(provider.connection, employerTokenAccount.address);
-    const employeeTokenAfter = await getAccount(provider.connection, employeeTokenAccount.address);
-
-    console.log("Employer token balance after stream:", Number(employerTokenAfter.amount)); // should be 220 (1200 - 980)
-    console.log("Vault token balance:", Number(vaultTokenAccount.amount)); // should be 980
-    console.log("Employee token balance:", Number(employeeTokenAfter.amount)); // should still be 0
+    console.log("Stream creation tx:", tx);
 
     // 7️⃣ Fetch the stream account and assert
     const stream = await program.account.stream.fetch(streamPda);
@@ -125,4 +125,35 @@ describe("streaming_payroll_solana", () => {
 
     console.log("Payroll stream created successfully!");
   });
+
+  it("Transfers tokens from employer to vault for payroll", async () => {
+    const tx = await program.methods
+      .depositToVault(new anchor.BN(980)) // now deposit 980 tokens
+      .accounts({
+        employer: employer.publicKey,
+        employee: employee.publicKey,
+        stream: streamPda,
+        vault: vaultPda,
+        tokenMint: mint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        employerTokenAccount: employerTokenAccount.address,
+        employeeTokenAccount: employeeTokenAccount.address,
+        systemProgram: anchor.web3.SystemProgram.programId,
+        rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+      })
+      .signers([employer])
+      .rpc();
+
+    console.log("Tokens transferred to vault. Tx:", tx);
+
+    const vaultTokenAccount = await getAccount(provider.connection, vaultPda);
+    const employerTokenAfter = await getAccount(provider.connection, employerTokenAccount.address);
+
+    console.log("Employer balance:", Number(employerTokenAfter.amount));
+    console.log("Vault balance:", Number(vaultTokenAccount.amount));
+
+    assert.equal(Number(vaultTokenAccount.amount), 980, "Vault should have 980 tokens");
+    assert.equal(Number(employerTokenAfter.amount), 220, "Employer should have 220 tokens left");
+  });
+
 });
