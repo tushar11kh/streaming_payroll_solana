@@ -24,8 +24,8 @@ describe("streaming_payroll_solana", () => {
   }
 
   // Load wallets
-  const employer = loadWallet("/Users/tusharmac/imp/Projects/Solana/testing_wallets/dev1.json");
-  const employee = loadWallet("/Users/tusharmac/imp/Projects/Solana/testing_wallets/dev2.json");
+  const employer = loadWallet("/Users/tusharmac/imp/Projects/Solana/testing_wallets/employer.json");
+  const employee = loadWallet("/Users/tusharmac/imp/Projects/Solana/testing_wallets/employee.json");
 
   let mint: anchor.web3.PublicKey;
   let employerTokenAccount: any;
@@ -95,7 +95,7 @@ describe("streaming_payroll_solana", () => {
 
     // 5️⃣ Call createStream (move 980 tokens to vault for employee)
     const tx = await program.methods
-      .createStream(new anchor.BN(980), new anchor.BN(2)) // deposit 980 tokens, rate 2/sec
+      .createStream(new anchor.BN(2)) //rate 2/sec
       .accounts({
         employer: employer.publicKey,
         employee: employee.publicKey,
@@ -116,9 +116,13 @@ describe("streaming_payroll_solana", () => {
     // 7️⃣ Fetch the stream account and assert
     const stream = await program.account.stream.fetch(streamPda);
 
+    console.log("Token Mint:", stream.tokenMint.toBase58());
+  console.log("Token Decimals:", stream.tokenDecimals);
+  console.log("Actual Mint:", mint.toBase58());
+
+
     assert.equal(stream.employer.toBase58(), employer.publicKey.toBase58(), "Employer should match");
     assert.equal(stream.employee.toBase58(), employee.publicKey.toBase58(), "Employee should match");
-    assert.equal(stream.depositedAmount.toString(), "980", "Deposited amount should match");
     assert.equal(stream.ratePerSecond.toString(), "2", "Rate per second should match");
     assert.equal(stream.claimedAmount.toString(), "0", "Claimed amount should be 0");
     assert.isTrue(stream.startTime.gt(new anchor.BN(0)), "Start time should be set");
@@ -155,5 +159,65 @@ describe("streaming_payroll_solana", () => {
     assert.equal(Number(vaultTokenAccount.amount), 980, "Vault should have 980 tokens");
     assert.equal(Number(employerTokenAfter.amount), 220, "Employer should have 220 tokens left");
   });
+
+  it("Employee claims tokens from stream after waiting", async () => {
+  // Wait for ~30 seconds to let tokens accrue
+  console.log("Waiting 30 seconds to simulate stream accrual...");
+  await new Promise((resolve) => setTimeout(resolve, 30 * 1000));
+
+  // Fetch the current Solana clock timestamp
+  const clockAccount = await provider.connection.getAccountInfo(anchor.web3.SYSVAR_CLOCK_PUBKEY);
+  const clockData = clockAccount!.data;
+  const currentTimestamp = new anchor.BN(clockData.readBigInt64LE(8 * 4)); // Clock timestamp is at offset 8*4
+
+  // Fetch stream account
+  const stream = await program.account.stream.fetch(streamPda);
+  
+  // Calculate elapsed time in seconds
+  const elapsedSeconds = currentTimestamp.sub(stream.startTime);
+  const elapsedSecondsNumber = Math.max(0, elapsedSeconds.toNumber());
+  
+  // Calculate expected claim
+  const expectedClaim = Math.min(
+    elapsedSecondsNumber * stream.ratePerSecond.toNumber(),
+    stream.depositedAmount.toNumber() - stream.claimedAmount.toNumber()
+  );
+
+  console.log("Current timestamp:", currentTimestamp.toString());
+  console.log("Stream start time:", stream.startTime.toString());
+  console.log("Elapsed seconds:", elapsedSecondsNumber);
+  console.log("Expected claim:", expectedClaim);
+
+  // Call claim
+  const tx = await program.methods
+    .claim()
+    .accounts({
+      employee: employee.publicKey,
+      stream: streamPda,
+      vault: vaultPda,
+      employeeTokenAccount: employeeTokenAccount.address,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .signers([employee])
+    .rpc();
+
+  console.log("Claim tx:", tx);
+
+  // Check balances
+  const employeeTokenAfter = await getAccount(provider.connection, employeeTokenAccount.address);
+  const vaultTokenAfter = await getAccount(provider.connection, vaultPda);
+
+  console.log("Employee balance after claim:", Number(employeeTokenAfter.amount));
+  console.log("Vault balance after claim:", Number(vaultTokenAfter.amount));
+
+  // Assert
+  assert.equal(Number(employeeTokenAfter.amount), expectedClaim, "Employee should have claimed correct amount");
+  assert.equal(Number(vaultTokenAfter.amount), stream.depositedAmount.toNumber() - expectedClaim, "Vault balance should reduce accordingly");
+
+  // Check claimedAmount updated
+  const updatedStream = await program.account.stream.fetch(streamPda);
+  assert.equal(Number(updatedStream.claimedAmount), expectedClaim, "Stream claimedAmount should be updated");
+});
+
 
 });
