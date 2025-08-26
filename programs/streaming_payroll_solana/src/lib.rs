@@ -30,7 +30,7 @@ pub struct CreateStream<'info> {
         init, // Create new account
         payer = employer, // Employer pays the rent for this account
         space = 8 + 32 + 32 + 32 + 1 + 8 + 8 + 8 + 8 + 1, // 8 (discriminator) + 32+32 (pubkeys) + 8+8+8+8 (u64 fields)
-        seeds = [b"stream", employer.key().as_ref(), employee.key().as_ref()], // PDA seeds
+        seeds = [b"stream", employer.key().as_ref(), employee.key().as_ref(),token_mint.key().as_ref()], // PDA seeds
         bump // Anchor will find the correct bump for us
     )]
     pub stream: Account<'info, Stream>, // This is the account we're creating
@@ -41,7 +41,7 @@ pub struct CreateStream<'info> {
         payer = employer,
         token::mint = token_mint,       // The SPL token you want to deposit (e.g., USDC)
         token::authority = stream,      // Stream PDA controls it
-        seeds = [b"vault", employer.key().as_ref(), employee.key().as_ref()],
+        seeds = [b"vault", employer.key().as_ref(), employee.key().as_ref(),token_mint.key().as_ref()],
         bump
     )]
     pub vault: Account<'info, TokenAccount>,
@@ -196,6 +196,7 @@ pub mod streaming_payroll_solana {
         b"stream",
         stream.employer.as_ref(),
         stream.employee.as_ref(),
+        stream.token_mint.as_ref(),
         &[stream.bump] // bump added to Stream struct
     ];
     let signer = &[&seeds[..]];
